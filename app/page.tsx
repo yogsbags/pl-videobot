@@ -9,8 +9,8 @@ import { ScriptGenerator } from '@/components/ScriptGenerator';
 import { VideoDisplay } from '@/components/VideoDisplay';
 import { VideoPromptInput } from '@/components/VideoPromptInput';
 import * as fal from "@fal-ai/serverless-client";
-import { AlertCircle, Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import { AlertCircle, Settings2, Sparkles } from 'lucide-react';
+import { useMemo, useState } from 'react';
 
 fal.config({
   proxyUrl: "/api/fal/proxy",
@@ -44,6 +44,29 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
+  // New settings for Wan 2.5 / Advisor
+  const [resolution, setResolution] = useState<'720p' | '480p' | '1080p'>('720p');
+  const [duration, setDuration] = useState<'5' | '10'>('10');
+
+  // Price Calculation
+  const estimatedPrice = useMemo(() => {
+    if (model === 'omnihuman-1.5') {
+      // OmniHuman: ~$0.16/s (varies, but using user's initial prompt estimate or safe default)
+      // Actually prompt said 0.16 for OmniHuman in ModelSelector.
+      // Assuming 5s default for OmniHuman if duration not applicable, or use duration if supported?
+      // OmniHuman usually depends on audio length.
+      return "0.50 - 1.50"; // Variable based on audio
+    }
+    if (model === 'wan-2.5') {
+      // Wan 2.5: Resolution-based pricing
+      // 480p: $0.05/s, 720p: $0.10/s, 1080p: $0.15/s
+      const costPerSec = resolution === '480p' ? 0.05 : resolution === '720p' ? 0.10 : 0.15;
+      const secs = parseInt(duration);
+      return (secs * costPerSec).toFixed(2);
+    }
+    return "Credit"; // Other models
+  }, [model, duration]);
+
   const handleOptimization = (optimized: string, recommendedModel: ModelType) => {
     setPrompt(optimized);
     setModel(recommendedModel);
@@ -52,7 +75,7 @@ export default function Home() {
   const handleReelTypeSelect = (type: ReelType) => {
     setReelType(type);
     if (type === 'advisor') {
-      setModel('omnihuman-1.5');
+      setModel('wan-2.5'); // Updated to Wan 2.5 as default for Advisor
     }
   };
 
@@ -85,13 +108,27 @@ export default function Home() {
           audio_url: audioUrl,
         };
       } else {
-        // Standard Text/Image to Video
+        // Standard Text/Image to Video (Wan 2.5, etc)
         input = {
           prompt: prompt,
-          aspect_ratio: "9:16",
+          aspect_ratio: resolution === '720p' ? "9:16" : "16:9", // Approximate mapping or use actual resolution if API supports
+          duration_seconds: parseInt(duration),
         };
+        // For Wan 2.5 specifically, check if we need exact resolution string like "720x1280"
+        // Fal usually accepts 'aspect_ratio' nicely. "9:16" is standard for Reels (720x1280 or 1080x1920)
+        // If user explicitly wants resolution control, we can pass that if the model supports it.
+        // Let's stick to aspect_ratio 9:16 for vertical reels as default.
+
         if (imageUrl) {
           input.image_url = imageUrl;
+        }
+
+        // Add duration if supported by model (Wan 2.5 supports it)
+        // Add duration if supported by model (Wan 2.5 supports it)
+        if (model === 'wan-2.5') {
+          if (audioUrl) {
+            input.audio_url = audioUrl;
+          }
         }
       }
 
@@ -148,6 +185,40 @@ export default function Home() {
               <ReelTypeSelector selectedType={reelType} onSelect={handleReelTypeSelect} />
             </section>
 
+            {/* Resolution & Duration settings for Wan 2.5 / others */}
+            {model !== 'omnihuman-1.5' && (
+              <section className="bg-slate-900/30 p-4 rounded-xl border border-slate-800">
+                <h3 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+                  <Settings2 className="w-4 h-4" />
+                  Video Settings
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Resolution</label>
+                    <select
+                      value={resolution}
+                      onChange={(e) => setResolution(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-emerald-500 outline-none"
+                    >
+                      <option value="720p">720p (HD)</option>
+                      <option value="1080p">1080p (FHD)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Duration</label>
+                    <select
+                      value={duration}
+                      onChange={(e) => setDuration(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-emerald-500 outline-none"
+                    >
+                      <option value="5">5 Seconds</option>
+                      <option value="10">10 Seconds</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+            )}
+
             <section>
               {model !== 'omnihuman-1.5' && (
                 <>
@@ -170,7 +241,7 @@ export default function Home() {
 
               <ImageUploader image={imageUrl} onImageUpload={setImageUrl} />
 
-              {model === 'omnihuman-1.5' && (
+              {(model === 'omnihuman-1.5' || model === 'wan-2.5') && (
                 <>
                   <ScriptGenerator
                     onAudioGenerated={setAudioUrl}
@@ -193,13 +264,21 @@ export default function Home() {
               <ModelSelector selectedModel={model} onSelect={setModel} />
             </section>
 
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerating || (model === 'omnihuman-1.5' ? (!imageUrl || !audioUrl) : !prompt)}
-              className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isGenerating ? 'Generating Video...' : 'Generate Video'}
-            </button>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm px-1">
+                <span className="text-slate-500">Estimated Cost:</span>
+                <span className="font-mono font-medium text-emerald-400 flex items-center gap-1">
+                  {model !== 'kling-2.6' && '$'}{estimatedPrice}
+                </span>
+              </div>
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerating || (model === 'omnihuman-1.5' ? (!imageUrl || !audioUrl) : !prompt)}
+                className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGenerating ? 'Generating Video...' : 'Generate Video'}
+              </button>
+            </div>
           </div>
 
           {/* Right Column: Preview */}
