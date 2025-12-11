@@ -19,16 +19,18 @@ fal.config({
 // Map our internal model IDs to actual Fal.ai endpoint IDs
 const FAL_ENDPOINTS: Record<ModelType, string> = {
   'wan-2.5': 'fal-ai/wan-25-preview/text-to-video',
-  'kling-2.6': 'fal-ai/kling-video/v2.6/pro/text-to-video', // Updated to v2.6 Pro
+  'kling-2.6': 'fal-ai/kling-video/v2.6/pro/text-to-video',
   'omnihuman-1.5': 'fal-ai/bytedance/omnihuman/v1.5',
+  'ovi': 'fal-ai/ovi/image-to-video',
   'runway-gen-4': 'fal-ai/runway-gen3/turbo/text-to-video',
 };
 
 // Image-to-Video Endpoints
 const I2V_ENDPOINTS: Record<ModelType, string> = {
   'wan-2.5': 'fal-ai/wan-25-preview/image-to-video',
-  'kling-2.6': 'fal-ai/kling-video/v2.6/pro/image-to-video', // Updated to v2.6 Pro
+  'kling-2.6': 'fal-ai/kling-video/v2.6/pro/image-to-video',
   'omnihuman-1.5': 'fal-ai/bytedance/omnihuman/v1.5',
+  'ovi': 'fal-ai/ovi/image-to-video',
   'runway-gen-4': 'fal-ai/runway-gen3/turbo/image-to-video',
 };
 
@@ -38,6 +40,8 @@ export default function Home() {
   const [prompt, setPrompt] = useState('');
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioBase64, setAudioBase64] = useState<string>('');
+  const [audioTimestamps, setAudioTimestamps] = useState<any[]>([]);
   const [clonedVoiceId, setClonedVoiceId] = useState<string | undefined>(undefined);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -46,7 +50,7 @@ export default function Home() {
 
   // New settings for Wan 2.5 / Advisor
   const [resolution, setResolution] = useState<'720p' | '480p' | '1080p'>('720p');
-  const [duration, setDuration] = useState<'5' | '10'>('10');
+  const [duration, setDuration] = useState<'5' | '10' | '30'>('10');
 
   // Price Calculation
   const estimatedPrice = useMemo(() => {
@@ -79,6 +83,11 @@ export default function Home() {
     }
   };
 
+  const handleTimestampsGenerated = (timestamps: any[], base64: string) => {
+    setAudioTimestamps(timestamps);
+    setAudioBase64(base64);
+  };
+
   const handleGenerate = async () => {
     if (model !== 'omnihuman-1.5' && !prompt) return;
     if (model === 'omnihuman-1.5' && (!imageUrl || !audioUrl)) return;
@@ -89,6 +98,71 @@ export default function Home() {
     setProgress(0);
 
     try {
+      // Check if we need multi-stage generation for 30s
+      if (duration === '30' && model !== 'omnihuman-1.5') {
+        // Split audio if available
+        let audioSegments: string[] = [];
+        if (audioUrl && audioBase64 && audioTimestamps.length > 0) {
+          setProgress(5);
+          const splitRes = await fetch('/api/split-audio', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              audioBase64: audioBase64,
+              timestamps: audioTimestamps,
+              targetDuration: 10
+            }),
+          });
+          const splitData = await splitRes.json();
+          if (splitData.success && splitData.segments) {
+            // Upload each audio segment to Fal
+            for (const segmentBase64 of splitData.segments) {
+              const byteCharacters = atob(segmentBase64);
+              const byteNumbers = new Array(byteCharacters.length);
+              for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+              }
+              const byteArray = new Uint8Array(byteNumbers);
+              const blob = new Blob([byteArray], { type: 'audio/wav' });
+              const file = new File([blob], `segment_${audioSegments.length}.wav`, { type: 'audio/wav' });
+              const url = await fal.storage.upload(file);
+              audioSegments.push(url);
+            }
+          }
+        }
+
+        // Generate 3x10s segments with proper frame chaining
+        const segments: string[] = [];
+
+        // Segment 1: Normal generation
+        setProgress(15);
+        const segment1 = await generateSegment(10, null, audioSegments[0]);
+        segments.push(segment1);
+        setProgress(40);
+
+        // Extract last frame from segment 1
+        const frame1 = await extractLastFrame(segment1);
+
+        // Segment 2: Use extracted frame from segment 1
+        const segment2 = await generateSegment(10, frame1, audioSegments[1]);
+        segments.push(segment2);
+        setProgress(65);
+
+        // Extract last frame from segment 2
+        const frame2 = await extractLastFrame(segment2);
+
+        // Segment 3: Use extracted frame from segment 2
+        const segment3 = await generateSegment(10, frame2, audioSegments[2]);
+        segments.push(segment3);
+        setProgress(90);
+
+        // Stitch all segments together
+        const stitchedVideo = await stitchVideos(segments);
+        setVideoUrl(stitchedVideo);
+        setProgress(100);
+        return;
+      }
+
       // Choose endpoint based on whether an image is provided
       const endpointId = imageUrl
         ? I2V_ENDPOINTS[model] || FAL_ENDPOINTS[model]
@@ -98,7 +172,19 @@ export default function Home() {
 
       let input: any = {};
 
-      if (model === 'omnihuman-1.5') {
+      if (model === 'ovi') {
+        // OVI specific payload - requires image and uses special prompt format
+        if (!imageUrl) {
+          throw new Error("OVI requires an image. Please upload or generate an image first.");
+        }
+        if (!prompt) {
+          throw new Error("OVI requires a prompt. Please enter your script/prompt.");
+        }
+        input = {
+          prompt: prompt, // Should be OVI-formatted with <S>, <E>, <AUDCAP> tags
+          image_url: imageUrl,
+        };
+      } else if (model === 'omnihuman-1.5') {
         // OmniHuman specific payload
         if (!imageUrl || !audioUrl) {
           throw new Error("OmniHuman requires both an Image and Audio file.");
@@ -132,6 +218,16 @@ export default function Home() {
         }
       }
 
+      // DEBUG: Log the exact payload being sent to Fal API
+      console.log('=== FAL API REQUEST DEBUG ===');
+      console.log('Endpoint:', endpointId);
+      console.log('Model:', model);
+      console.log('Input payload:', JSON.stringify(input, null, 2));
+      console.log('Image URL provided:', !!imageUrl);
+      console.log('Audio URL provided:', !!audioUrl);
+      console.log('Prompt length:', prompt?.length || 0);
+      console.log('===========================');
+
       const result: any = await fal.subscribe(endpointId, {
         input,
         logs: true,
@@ -151,12 +247,110 @@ export default function Home() {
       }
 
     } catch (err: any) {
-      console.error("Generation failed:", err);
+      console.error("=== GENERATION ERROR DEBUG ===");
+      console.error("Error object:", err);
+      console.error("Error message:", err.message);
+      console.error("Error response:", err.response);
+      console.error("Error data:", err.data);
+      console.error("Error status:", err.status);
+      console.error("Full error JSON:", JSON.stringify(err, null, 2));
+      console.error("=============================");
       setError(err.message || "Failed to generate video");
     } finally {
       setIsGenerating(false);
     }
   };
+
+  // Helper function to generate a single segment
+  const generateSegment = async (segmentDuration: number, referenceImage: string | null, audioSegmentUrl?: string) => {
+    const endpointId = referenceImage || imageUrl
+      ? I2V_ENDPOINTS[model] || FAL_ENDPOINTS[model]
+      : FAL_ENDPOINTS[model];
+
+    const input: any = {
+      prompt: prompt,
+      aspect_ratio: resolution === '720p' ? "9:16" : resolution === '480p' ? "9:16" : "16:9",
+      duration_seconds: segmentDuration,
+    };
+
+    if (referenceImage) {
+      input.image_url = referenceImage;
+    } else if (imageUrl) {
+      input.image_url = imageUrl;
+    }
+
+    if (model === 'wan-2.5' && audioSegmentUrl) {
+      input.audio_url = audioSegmentUrl;
+    }
+
+    const result: any = await fal.subscribe(endpointId, { input, logs: true });
+
+    if (result.video && result.video.url) {
+      return result.video.url;
+    }
+    throw new Error("No video URL in segment generation");
+  };
+
+  // Helper function to extract last frame from video
+  const extractLastFrame = async (videoUrl: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.src = videoUrl;
+
+      video.addEventListener('loadedmetadata', () => {
+        // Seek to the last frame (duration - 0.1s to ensure we get a valid frame)
+        video.currentTime = Math.max(0, video.duration - 0.1);
+      });
+
+      video.addEventListener('seeked', () => {
+        try {
+          // Create canvas and draw the video frame
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+
+          if (!ctx) {
+            reject(new Error('Could not get canvas context'));
+            return;
+          }
+
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          // Convert canvas to data URL
+          const frameDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+          resolve(frameDataUrl);
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      video.addEventListener('error', (err) => {
+        reject(new Error('Failed to load video for frame extraction'));
+      });
+    });
+  };
+
+  // Helper function to stitch multiple videos together
+  const stitchVideos = async (videoUrls: string[]) => {
+    const response = await fetch('/api/stitch-videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        video_urls: videoUrls,
+      }),
+    });
+
+    const data = await response.json();
+    if (!data.success || !data.video_base64) {
+      throw new Error(data.error || 'Failed to stitch videos');
+    }
+
+    // Convert base64 to data URL for video player
+    return `data:video/mp4;base64,${data.video_base64}`;
+  };
+
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-200 p-8">
@@ -177,9 +371,19 @@ export default function Home() {
           <div className="space-y-8">
 
 
+            {/* Stage 1: Select Model */}
             <section>
               <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-800 text-xs">1</span>
+                Select Model
+              </h2>
+              <ModelSelector selectedModel={model} onSelect={setModel} />
+            </section>
+
+            {/* Stage 2: Select Strategy */}
+            <section>
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-800 text-xs">2</span>
                 Select Strategy
               </h2>
               <ReelTypeSelector selectedType={reelType} onSelect={handleReelTypeSelect} />
@@ -230,6 +434,7 @@ export default function Home() {
                     prompt={prompt}
                     setPrompt={setPrompt}
                     reelType={reelType}
+                    model={model}
                     onOptimize={handleOptimization}
                   />
                 </>
@@ -241,10 +446,12 @@ export default function Home() {
 
               <ImageUploader image={imageUrl} onImageUpload={setImageUrl} />
 
+              {/* Audio Section - Hidden for OVI (has native audio) */}
               {(model === 'omnihuman-1.5' || model === 'wan-2.5') && (
                 <>
                   <ScriptGenerator
                     onAudioGenerated={setAudioUrl}
+                    onTimestampsGenerated={handleTimestampsGenerated}
                     clonedVoiceId={clonedVoiceId}
                   />
                   <AudioUploader
@@ -254,14 +461,6 @@ export default function Home() {
                   />
                 </>
               )}
-            </section>
-
-            <section>
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-800 text-xs">3</span>
-                Select Model
-              </h2>
-              <ModelSelector selectedModel={model} onSelect={setModel} />
             </section>
 
             <div className="space-y-3">

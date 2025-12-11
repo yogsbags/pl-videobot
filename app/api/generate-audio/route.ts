@@ -48,10 +48,12 @@ export async function POST(request: Request) {
       modelId,
       voice: { mode: 'id', id: voiceId },
       transcript: text,
-      language: language === 'hinglish' ? 'hi' : language, // Map hinglish to hindi for model, or mixed
+      language: language === 'hinglish' ? 'hi' : language,
+      addTimestamps: true, // Enable word-level timestamps
     });
 
     const chunks: Buffer[] = [];
+    const timestamps: any[] = [];
 
     // Wrap event listener in a promise
     await new Promise<void>((resolve, reject) => {
@@ -61,6 +63,9 @@ export async function POST(request: Request) {
             const parsed = JSON.parse(message);
             if (parsed.data) {
               chunks.push(Buffer.from(parsed.data, 'base64'));
+            }
+            if (parsed.word_timestamps) {
+              timestamps.push(...parsed.word_timestamps.words);
             }
             if (parsed.done) {
               resolve();
@@ -82,7 +87,8 @@ export async function POST(request: Request) {
 
     // Return as base64
     return NextResponse.json({
-      audioBase64: wavBuffer.toString('base64')
+      audioBase64: wavBuffer.toString('base64'),
+      timestamps: timestamps // Include word timestamps for splitting
     });
 
   } catch (error: any) {

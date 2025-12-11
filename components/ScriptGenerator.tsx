@@ -4,10 +4,11 @@ import { useState } from 'react';
 
 interface ScriptGeneratorProps {
   onAudioGenerated: (url: string) => void;
+  onTimestampsGenerated?: (timestamps: any[], audioBase64: string) => void;
   clonedVoiceId?: string;
 }
 
-export function ScriptGenerator({ onAudioGenerated, clonedVoiceId }: ScriptGeneratorProps) {
+export function ScriptGenerator({ onAudioGenerated, onTimestampsGenerated, clonedVoiceId }: ScriptGeneratorProps) {
   const [topic, setTopic] = useState('');
   const [script, setScript] = useState('');
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -53,6 +54,11 @@ export function ScriptGenerator({ onAudioGenerated, clonedVoiceId }: ScriptGener
       const data = await res.json();
 
       if (data.audioBase64) {
+        // Store timestamps if available
+        if (data.timestamps && onTimestampsGenerated) {
+          onTimestampsGenerated(data.timestamps, data.audioBase64);
+        }
+
         // 2. Convert to Blob
         const byteCharacters = atob(data.audioBase64);
         const byteNumbers = new Array(byteCharacters.length);

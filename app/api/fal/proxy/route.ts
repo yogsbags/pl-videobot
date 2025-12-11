@@ -36,6 +36,14 @@ async function proxyHandler(request: NextRequest) {
 
   const body = request.method === "GET" ? undefined : await request.text();
 
+  // DEBUG: Log full request details
+  console.log("=== PROXY REQUEST DEBUG ===");
+  console.log("Target URL:", targetUrl);
+  console.log("Method:", request.method);
+  console.log("Headers:", Object.fromEntries(headers.entries()));
+  console.log("Body preview:", body?.substring(0, 500));
+  console.log("========================");
+
   try {
     // Increase timeout to 60 seconds to avoid ConnectTimeoutError
     const response = await fetch(targetUrl, {
@@ -45,6 +53,28 @@ async function proxyHandler(request: NextRequest) {
       signal: AbortSignal.timeout(60000),
     });
 
+    // DEBUG: Log response details
+    console.log("=== PROXY RESPONSE DEBUG ===");
+    console.log("Status:", response.status, response.statusText);
+    console.log("Response headers:", Object.fromEntries(response.headers.entries()));
+    console.log("========================");
+
+    // If error status, try to read the error body
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("=== FAL API ERROR RESPONSE ===");
+      console.error("Status:", response.status);
+      console.error("Error body:", errorText);
+      console.error("============================");
+
+      // Return the error as-is so the client can see it
+      return new NextResponse(errorText, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+      });
+    }
+
     const responseHeaders = new Headers(response.headers);
 
     return new NextResponse(response.body, {
@@ -53,7 +83,11 @@ async function proxyHandler(request: NextRequest) {
       headers: responseHeaders,
     });
   } catch (error: any) {
-    console.error("Proxy error:", error);
+    console.error("=== PROXY EXCEPTION ===");
+    console.error("Error:", error);
+    console.error("Message:", error.message);
+    console.error("Stack:", error.stack);
+    console.error("=====================");
     return NextResponse.json({ error: error.message || "Proxy failed" }, { status: 500 });
   }
 }

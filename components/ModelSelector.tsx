@@ -1,6 +1,6 @@
 import { clsx } from 'clsx';
 
-export type ModelType = 'wan-2.5' | 'kling-2.6' | 'omnihuman-1.5' | 'runway-gen-4';
+export type ModelType = 'wan-2.5' | 'kling-2.6' | 'omnihuman-1.5' | 'runway-gen-4' | 'ovi';
 
 interface ModelSelectorProps {
   selectedModel: ModelType;
@@ -11,6 +11,7 @@ const MODELS: { id: ModelType; label: string; badge?: string; cost: string; feat
   { id: 'wan-2.5', label: 'Wan 2.5', badge: '4K Charts', cost: '~$0.05/s', features: 'Best for Text & Data' },
   { id: 'kling-2.6', label: 'Kling 2.6', badge: 'Audio', cost: 'Credit', features: 'Cinematic Motion + SFX' },
   { id: 'omnihuman-1.5', label: 'OmniHuman 1.5', badge: 'Lip-Sync', cost: '~$0.16/s', features: 'Talking Advisor' },
+  { id: 'ovi', label: 'OVI', badge: 'Native Audio', cost: '~$0.12/s', features: 'AI Voice + Emotion' },
   { id: 'runway-gen-4', label: 'Runway Gen-4', cost: 'Premium', features: 'Consistent Characters' },
 ];
 
