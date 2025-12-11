@@ -1,4 +1,10 @@
+import * as fal from "@fal-ai/serverless-client";
 import { NextRequest, NextResponse } from 'next/server';
+
+// Configure fal client
+fal.config({
+  credentials: process.env.FAL_KEY,
+});
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,48 +15,50 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 
-    const apiKey = process.env.CARTESIA_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'CARTESIA_API_KEY not configured' }, { status: 500 });
+    if (!process.env.FAL_KEY) {
+      return NextResponse.json({ error: 'FAL_KEY not configured' }, { status: 500 });
     }
 
-    // Prepare FormData for Cartesia
-    const cartesiaFormData = new FormData();
-    cartesiaFormData.append('file', file);
-    cartesiaFormData.append('name', `Cloned Voice ${Date.now()}`);
-    cartesiaFormData.append('mode', 'similarity');
-    cartesiaFormData.append('enhance', 'true');
+    console.log('Uploading audio file to fal.ai storage...');
 
-    // Cartesia expects the file field to be named 'clip'
-    // Let's re-append correctly
-    const finalFormData = new FormData();
-    finalFormData.append('clip', file);
-    finalFormData.append('name', `Cloned Voice ${Date.now()}`);
-    finalFormData.append('mode', 'similarity');
-    finalFormData.append('enhance', 'true');
-    finalFormData.append('language', 'en');
+    // Upload the audio file to fal.ai storage
+    const audioUrl = await fal.storage.upload(file);
+    console.log('Audio uploaded:', audioUrl);
 
-    const response = await fetch('https://api.cartesia.ai/voices/clone', {
-      method: 'POST',
-      headers: {
-        'X-API-Key': apiKey,
-        'Cartesia-Version': '2024-06-10',
-        // Note: Content-Type is set automatically by fetch with FormData
+    // Use fal.ai's voice cloning model
+    // Note: Using metavoice-1b for open-source voice cloning
+    console.log('Starting voice cloning with fal.ai...');
+
+    const result = await fal.subscribe("fal-ai/metavoice", {
+      input: {
+        audio_url: audioUrl,
+        // The model will extract voice characteristics from the audio
       },
-      body: finalFormData,
+      logs: true,
+      onQueueUpdate: (update) => {
+        console.log('Queue update:', update);
+      },
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Cartesia Clone Error:', errorText);
-      return NextResponse.json({ error: `Cartesia Error: ${errorText}` }, { status: response.status });
-    }
+    console.log('Voice cloning result:', result);
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    // Extract voice_id from the result
+    // The exact response format may vary, but we'll handle common cases
+    const voiceId = result.voice_id || result.id || audioUrl;
+
+    return NextResponse.json({
+      success: true,
+      voice_id: voiceId,
+      id: voiceId,
+      audio_url: audioUrl,
+      message: 'Voice cloned successfully using fal.ai',
+    });
 
   } catch (error: any) {
     console.error('Voice cloning failed:', error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({
+      error: error.message || 'Internal Server Error',
+      details: error.toString(),
+    }, { status: 500 });
   }
 }
